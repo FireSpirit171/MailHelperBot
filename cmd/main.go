@@ -18,7 +18,6 @@ func main() {
 		log.Fatal("TELEGRAM_TOKEN is not set")
 	}
 
-	// Получаем настройки веб-сервера
 	webPort := os.Getenv("WEB_PORT")
 	if webPort == "" {
 		webPort = "8080"
@@ -31,12 +30,9 @@ func main() {
 
 	redirectURI := baseURL + "/oauth/callback/"
 
-	// Инициализация хранилища
 	storage := bot.NewMemoryStorage()
 
-	// Создаем бота
 	b := bot.New(token)
-	// Инициализируем OAuth service с redirect_uri
 	oauthService := bot.NewOAuthService(
 		os.Getenv("MAIL_CLIENT_ID"),
 		os.Getenv("MAIL_CLIENT_SECRET"),
@@ -44,10 +40,8 @@ func main() {
 		storage,
 	)
 
-	// Устанавливаем OAuth service в бота
 	b.SetOAuthService(oauthService)
 
-	// Запускаем веб-сервер в горутине
 	webServer := bot.NewWebServer(oauthService, b.Api, webPort)
 	go func() {
 		if err := webServer.Start(); err != nil {
@@ -55,6 +49,5 @@ func main() {
 		}
 	}()
 
-	// Запускаем бота
 	b.Start()
 }

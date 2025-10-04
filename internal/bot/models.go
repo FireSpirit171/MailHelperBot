@@ -39,7 +39,6 @@ type UserSession struct {
 	Name         string
 }
 
-// Генерация случайного state
 func GenerateState() (string, error) {
 	bytes := make([]byte, 32)
 	_, err := rand.Read(bytes)
