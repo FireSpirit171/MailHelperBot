@@ -6,7 +6,8 @@ import (
 )
 
 type Bot struct {
-	api *tgbotapi.BotAPI
+	Api   *tgbotapi.BotAPI
+	oauth *OAuthService
 }
 
 func New(token string) *Bot {
@@ -15,16 +16,22 @@ func New(token string) *Bot {
 		log.Fatalf("failed to create bot: %v", err)
 	}
 
-	return &Bot{api: bot}
+	return &Bot{
+		Api: bot,
+	}
+}
+
+func (b *Bot) SetOAuthService(oauth *OAuthService) {
+	b.oauth = oauth
 }
 
 func (b *Bot) Start() {
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
 
-	updates := b.api.GetUpdatesChan(u)
+	updates := b.Api.GetUpdatesChan(u)
 
-	log.Printf("Authorized on account %s", b.api.Self.UserName)
+	log.Printf("Authorized on account %s", b.Api.Self.UserName)
 
 	for update := range updates {
 		if update.Message == nil {
@@ -32,7 +39,9 @@ func (b *Bot) Start() {
 		}
 
 		if update.Message.IsCommand() {
-			handleCommand(b.api, update.Message)
+			handleCommand(b, update.Message)
+		} else {
+			handleMessage(b, update.Message)
 		}
 	}
 }
