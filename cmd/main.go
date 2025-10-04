@@ -18,6 +18,6 @@ func main() {
 		log.Fatal("TELEGRAM_TOKEN is not set")
 	}
 
-	b := bot.New(token)
-	b.Start()
+	mailBot := bot.New(token)
+	mailBot.Start()
 }
