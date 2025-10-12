@@ -3,25 +3,29 @@ package bot
 import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"log"
+	"mail_helper_bot/internal/pkg/oauth/oauth_service"
 )
 
 type Bot struct {
-	Api   *tgbotapi.BotAPI
-	oauth *OAuthService
+	Api     *tgbotapi.BotAPI
+	oauth   *oauth_service.OAuthService
+	storage oauth_service.Storage
 }
 
-func New(token string) *Bot {
+func New(token string, storage oauth_service.Storage) *Bot {
 	bot, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
 		log.Fatalf("failed to create bot: %v", err)
 	}
 
 	return &Bot{
-		Api: bot,
+		Api:     bot,
+		storage: storage,
 	}
 }
 
-func (b *Bot) SetOAuthService(oauth *OAuthService) {
+// todo: окак(вынести в New)
+func (b *Bot) SetOAuthService(oauth *oauth_service.OAuthService) {
 	b.oauth = oauth
 }
 

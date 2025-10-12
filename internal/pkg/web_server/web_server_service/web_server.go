@@ -1,19 +1,21 @@
-package bot
+package web_server_service
 
 import (
 	"fmt"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"log"
+	"mail_helper_bot/internal/pkg/oauth/oauth_service"
 	"net/http"
 )
 
+// todo: прописать нормальные интерфейсы
 type WebServer struct {
-	oauth  *OAuthService
+	oauth  *oauth_service.OAuthService
 	botAPI *tgbotapi.BotAPI
 	port   string
 }
 
-func NewWebServer(oauth *OAuthService, botAPI *tgbotapi.BotAPI, port string) *WebServer {
+func NewWebServer(oauth *oauth_service.OAuthService, botAPI *tgbotapi.BotAPI, port string) *WebServer {
 	return &WebServer{
 		oauth:  oauth,
 		botAPI: botAPI,
@@ -21,6 +23,7 @@ func NewWebServer(oauth *OAuthService, botAPI *tgbotapi.BotAPI, port string) *We
 	}
 }
 
+// todo: вынести в отдельный main и ручки в router
 func (ws *WebServer) Start() error {
 	http.HandleFunc("/oauth/callback/", ws.handleOAuthCallback)
 	http.HandleFunc("/health/", ws.handleHealthCheck)
@@ -99,6 +102,7 @@ func (ws *WebServer) handleOAuthCallback(w http.ResponseWriter, r *http.Request)
 	ws.sendSuccessResponse(w, userInfo.Name, userInfo.Email)
 }
 
+// todo: это пздец
 func (ws *WebServer) sendSuccessResponse(w http.ResponseWriter, name, email string) {
 	html := fmt.Sprintf(`
 <!DOCTYPE html>
