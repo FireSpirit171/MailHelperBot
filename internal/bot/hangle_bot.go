@@ -123,7 +123,7 @@ func handleStatusCommand(bot *Bot, msg *tgbotapi.Message) {
 	if err != nil {
 		newToken, err := bot.oauth.RefreshToken(session.RefreshToken)
 		if err != nil {
-			bot.oauth.storage.DeleteSession(msg.Chat.ID)
+			bot.storage.DeleteSession(msg.Chat.ID)
 			reply := tgbotapi.NewMessage(msg.Chat.ID,
 				"Сессия устарела. Пожалуйста, авторизуйтесь снова с помощью /login")
 			bot.Api.Send(reply)
@@ -143,7 +143,7 @@ func handleStatusCommand(bot *Bot, msg *tgbotapi.Message) {
 }
 
 func handleLogoutCommand(bot *Bot, msg *tgbotapi.Message) {
-	err := bot.oauth.storage.DeleteSession(msg.Chat.ID)
+	err := bot.storage.DeleteSession(msg.Chat.ID)
 	if err != nil {
 		log.Printf("Error deleting session: %v", err)
 		reply := tgbotapi.NewMessage(msg.Chat.ID,

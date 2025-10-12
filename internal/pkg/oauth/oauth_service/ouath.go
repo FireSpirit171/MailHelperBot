@@ -1,13 +1,42 @@
-package bot
+package oauth_service
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mail_helper_bot/internal/pkg/session/domain"
 	"net/http"
 	"net/url"
 	"strings"
 )
+
+// todo: нормально распределить структуры и методы
+type UserInfo struct {
+	ID        string `json:"id"`
+	ClientID  string `json:"client_id"`
+	Gender    string `json:"gender"`
+	Name      string `json:"name"`
+	Nickname  string `json:"nickname"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+	Email     string `json:"email"`
+	Image     string `json:"image"`
+}
+
+type TokenResponse struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresIn    int    `json:"expires_in"`
+	TokenType    string `json:"token_type"`
+}
+
+type OAuthConfig struct {
+	ClientID     string
+	ClientSecret string
+	RedirectURI  string
+}
 
 type OAuthService struct {
 	config  *OAuthConfig
@@ -173,7 +202,7 @@ func (s *OAuthService) GetUserInfo(accessToken string) (*UserInfo, error) {
 }
 
 func (s *OAuthService) SaveUserSession(chatID int64, tokenResp *TokenResponse, userInfo *UserInfo) error {
-	session := &UserSession{
+	session := &domain.UserSession{
 		ChatID:       chatID,
 		AccessToken:  tokenResp.AccessToken,
 		RefreshToken: tokenResp.RefreshToken,
@@ -183,6 +212,15 @@ func (s *OAuthService) SaveUserSession(chatID int64, tokenResp *TokenResponse, u
 	return s.storage.SaveSession(chatID, session)
 }
 
-func (s *OAuthService) GetUserSession(chatID int64) (*UserSession, error) {
+func (s *OAuthService) GetUserSession(chatID int64) (*domain.UserSession, error) {
 	return s.storage.GetSession(chatID)
+}
+
+func GenerateState() (string, error) {
+	bytes := make([]byte, 32)
+	_, err := rand.Read(bytes)
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(bytes), nil
 }

@@ -4,6 +4,9 @@ import (
 	"github.com/joho/godotenv"
 	"log"
 	"mail_helper_bot/internal/bot"
+	"mail_helper_bot/internal/pkg/oauth/oauth_service"
+	"mail_helper_bot/internal/pkg/session/usecase"
+	"mail_helper_bot/internal/pkg/web_server/web_server_service"
 	"os"
 )
 
@@ -30,10 +33,10 @@ func main() {
 
 	redirectURI := baseURL + "/oauth/callback/"
 
-	storage := bot.NewMemoryStorage()
+	storage := usecase.NewMemoryStorage()
 
-	b := bot.New(token)
-	oauthService := bot.NewOAuthService(
+	b := bot.New(token, storage)
+	oauthService := oauth_service.NewOAuthService(
 		os.Getenv("MAIL_CLIENT_ID"),
 		os.Getenv("MAIL_CLIENT_SECRET"),
 		redirectURI,
@@ -42,7 +45,7 @@ func main() {
 
 	b.SetOAuthService(oauthService)
 
-	webServer := bot.NewWebServer(oauthService, b.Api, webPort)
+	webServer := web_server_service.NewWebServer(oauthService, b.Api, webPort)
 	go func() {
 		if err := webServer.Start(); err != nil {
 			log.Fatalf("Failed to start web server: %v", err)
