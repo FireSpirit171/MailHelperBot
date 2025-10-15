@@ -1,16 +1,20 @@
 package main
 
 import (
-	"github.com/joho/godotenv"
+	"database/sql"
 	"log"
 	"mail_helper_bot/internal/bot"
 	"mail_helper_bot/internal/pkg/oauth/oauth_service"
-	"mail_helper_bot/internal/pkg/session/usecase"
+	"mail_helper_bot/internal/pkg/session/postgres_storage"
 	"mail_helper_bot/internal/pkg/web_server/web_server_service"
 	"os"
+
+	"github.com/joho/godotenv"
+	_ "github.com/lib/pq"
 )
 
 func main() {
+	// ----------------- ENV -----------------
 	err := godotenv.Load()
 	if err != nil {
 		log.Fatal("Error loading .env file")
@@ -33,9 +37,24 @@ func main() {
 
 	redirectURI := baseURL + "/oauth/callback/"
 
-	storage := usecase.NewMemoryStorage()
+	dbConnStr := os.Getenv("POSTGRES_DSN")
+	if dbConnStr == "" {
+		dbConnStr = "postgres://mail_bot:mail_bot_pass@db:5432/mail_helper?sslmode=disable"
+	}
 
+	// ----------------- DB -----------------
+	db, err := sql.Open("postgres", dbConnStr)
+	if err != nil {
+		log.Fatalf("failed to connect to db: %v", err)
+	}
+	defer db.Close()
+
+	// ----------------- Storage -----------------
+	storage := postgres_storage.NewPostgresStorage(db)
+
+	// ----------------- Bot -----------------
 	b := bot.New(token, storage)
+
 	oauthService := oauth_service.NewOAuthService(
 		os.Getenv("MAIL_CLIENT_ID"),
 		os.Getenv("MAIL_CLIENT_SECRET"),
@@ -45,6 +64,7 @@ func main() {
 
 	b.SetOAuthService(oauthService)
 
+	// ----------------- Web server -----------------
 	webServer := web_server_service.NewWebServer(oauthService, b.Api, webPort)
 	go func() {
 		if err := webServer.Start(); err != nil {
