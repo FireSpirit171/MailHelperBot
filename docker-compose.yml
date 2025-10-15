@@ -1,0 +1,43 @@
+services:
+  db:
+    image: postgres:18
+    container_name: mail_helper_db
+    environment:
+      POSTGRES_USER: mail_bot
+      POSTGRES_PASSWORD: mail_bot_pass
+      POSTGRES_DB: mail_helper
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mail_bot -d mail_helper"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mail_helper_app
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./:/app
+    working_dir: /app
+    command: >
+      sh -c "echo 'Waiting for db...'; 
+             while ! nc -z db 5432; do sleep 1; done;
+             echo 'DB is up! Starting app...';
+             go run ./cmd/main.go"
+    ports:
+      - "8080:8080"
+    tty: true
+
+volumes:
+  pgdata:
