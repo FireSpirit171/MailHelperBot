@@ -1,6 +1,6 @@
 services:
   db:
-    image: postgres:15  # Используем версию 15 вместо 18
+    image: postgres:18
     container_name: mail_helper_db
     environment:
       POSTGRES_USER: mail_bot
@@ -9,13 +9,29 @@ services:
     ports:
       - "5433:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data  # Старый путь
+      - pgdata:/var/lib/postgresql/data
       - ./db/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U mail_bot -d mail_helper"]
       interval: 5s
       timeout: 5s
       retries: 10
+
+  logger:
+    image: golang:1.21-alpine
+    container_name: mail_helper_logger
+    volumes:
+      - ./cmd/log_server:/app
+      - ./logs:/logs
+    working_dir: /app
+    command: go run main.go
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8081/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   app:
     build:
@@ -27,13 +43,16 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      logger:
+        condition: service_healthy
     volumes:
       - ./:/app
     working_dir: /app
     command: >
-      sh -c "echo 'Waiting for db...'; 
+      sh -c "echo 'Waiting for services...';
              while ! nc -z db 5432; do sleep 1; done;
-             echo 'DB is up! Starting app...';
+             while ! nc -z logger 8081; do sleep 1; done;
+             echo 'All services are up! Starting app...';
              go run ./cmd/main.go"
     ports:
       - "8080:8080"

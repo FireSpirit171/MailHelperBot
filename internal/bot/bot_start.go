@@ -4,6 +4,7 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"log"
 	"mail_helper_bot/internal/pkg/group/repository"
+	"mail_helper_bot/internal/pkg/media"
 	"mail_helper_bot/internal/pkg/oauth/oauth_service"
 	"os"
 	"path/filepath"
@@ -11,11 +12,12 @@ import (
 )
 
 type Bot struct {
-	Api        *tgbotapi.BotAPI
-	oauth      *oauth_service.OAuthService
-	storage    oauth_service.Storage
-	groupRepo  repository.GroupRepository
-	bufferPath string
+	Api            *tgbotapi.BotAPI
+	oauth          *oauth_service.OAuthService
+	storage        oauth_service.Storage
+	groupRepo      repository.GroupRepository
+	bufferPath     string
+	mediaProcessor *media.MediaProcessor
 }
 
 func New(token string, storage oauth_service.Storage, groupRepo repository.GroupRepository) *Bot {
@@ -31,16 +33,21 @@ func New(token string, storage oauth_service.Storage, groupRepo repository.Group
 	}
 
 	return &Bot{
-		Api:        bot,
-		storage:    storage,
-		groupRepo:  groupRepo,
-		bufferPath: bufferPath,
+		Api:            bot,
+		storage:        storage,
+		groupRepo:      groupRepo,
+		bufferPath:     bufferPath,
+		mediaProcessor: media.NewMediaProcessor("./buffer"),
 	}
 }
 
 // todo: окак(вынести в New)
 func (b *Bot) SetOAuthService(oauth *oauth_service.OAuthService) {
 	b.oauth = oauth
+}
+
+func (b *Bot) GetMediaProcessor() *media.MediaProcessor {
+	return b.mediaProcessor
 }
 
 func (b *Bot) Start() {

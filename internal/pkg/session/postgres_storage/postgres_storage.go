@@ -98,3 +98,36 @@ func (p *PostgresStorage) CleanupExpiredStates() error {
 	_, err := p.db.Exec(`DELETE FROM oauth_states WHERE expires_at < NOW()`)
 	return err
 }
+
+// SavePublicFolder сохраняет информацию о публичной папке
+func (p *PostgresStorage) SavePublicFolder(chatID int64, publicURL string) error {
+	_, err := p.db.Exec(`
+        INSERT INTO public_folders (chat_id, folder_name, public_url)
+        VALUES ($1, $2, $3)
+    `, chatID, fmt.Sprintf("chat_%d", chatID), publicURL)
+	return err
+}
+
+// GetPublicFolders получает список публичных папок для чата
+func (p *PostgresStorage) GetPublicFolders(chatID int64) ([]string, error) {
+	rows, err := p.db.Query(`
+        SELECT public_url FROM public_folders
+        WHERE chat_id = $1
+        ORDER BY created_at DESC
+    `, chatID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var urls []string
+	for rows.Next() {
+		var url string
+		if err := rows.Scan(&url); err != nil {
+			return nil, err
+		}
+		urls = append(urls, url)
+	}
+
+	return urls, nil
+}

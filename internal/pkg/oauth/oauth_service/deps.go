@@ -10,4 +10,6 @@ type Storage interface {
 	GetChatIDByState(state string) (int64, error)
 	CleanupExpiredStates() error
 	DeleteState(state string) error
+	SavePublicFolder(chatID int64, publicURL string) error
+	GetPublicFolders(chatID int64) ([]string, error)
 }
