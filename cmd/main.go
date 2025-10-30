@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"log"
 	"mail_helper_bot/internal/bot"
+	groupPostgres "mail_helper_bot/internal/pkg/group/repository"
 	"mail_helper_bot/internal/pkg/oauth/oauth_service"
 	"mail_helper_bot/internal/pkg/session/postgres_storage"
 	"mail_helper_bot/internal/pkg/web_server/web_server_service"
@@ -51,10 +52,9 @@ func main() {
 
 	// ----------------- Storage -----------------
 	storage := postgres_storage.NewPostgresStorage(db)
+	groupStorage := groupPostgres.NewGroupStorage(db)
 
-	// ----------------- Bot -----------------
-	b := bot.New(token, storage)
-
+	// ----------------- OAuth Service -----------------
 	oauthService := oauth_service.NewOAuthService(
 		os.Getenv("MAIL_CLIENT_ID"),
 		os.Getenv("MAIL_CLIENT_SECRET"),
@@ -62,6 +62,8 @@ func main() {
 		storage,
 	)
 
+	// ----------------- Bot -----------------
+	b := bot.New(token, storage, groupStorage)
 	b.SetOAuthService(oauthService)
 
 	// ----------------- Web server -----------------
