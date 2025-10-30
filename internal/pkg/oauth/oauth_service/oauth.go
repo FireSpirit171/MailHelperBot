@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mail_helper_bot/internal/pkg/http_client"
 	"mail_helper_bot/internal/pkg/session/domain"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 )
 
@@ -41,13 +43,14 @@ type OAuthConfig struct {
 type OAuthService struct {
 	config  *OAuthConfig
 	storage Storage
+	client  *http_client.LoggedClient
 }
 
 func NewOAuthService(clientID, clientSecret, redirectURI string, storage Storage) *OAuthService {
 	if redirectURI == "" {
 		redirectURI = "urn:ietf:wg:oauth:2.0:oob"
 	}
-
+	logServerURL := os.Getenv("LOG_SERVER_URL")
 	return &OAuthService{
 		config: &OAuthConfig{
 			ClientID:     clientID,
@@ -55,6 +58,7 @@ func NewOAuthService(clientID, clientSecret, redirectURI string, storage Storage
 			RedirectURI:  redirectURI,
 		},
 		storage: storage,
+		client:  http_client.NewLoggedClient(logServerURL),
 	}
 }
 
@@ -100,8 +104,7 @@ func (s *OAuthService) ExchangeCodeForToken(code, state string) (*TokenResponse,
 	req.SetBasicAuth(s.config.ClientID, s.config.ClientSecret)
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := s.client.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -141,8 +144,7 @@ func (s *OAuthService) RefreshToken(refreshToken string) (*TokenResponse, error)
 
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := s.client.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -176,8 +178,7 @@ func (s *OAuthService) GetUserInfo(accessToken string) (*UserInfo, error) {
 	q.Add("access_token", accessToken)
 	req.URL.RawQuery = q.Encode()
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := s.client.Do(req)
 	if err != nil {
 		return nil, err
 	}

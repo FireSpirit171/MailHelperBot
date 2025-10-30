@@ -17,6 +17,8 @@ func handleCommand(bot *Bot, msg *tgbotapi.Message) {
 		handleStatusCommand(bot, msg)
 	case "logout":
 		handleLogoutCommand(bot, msg)
+	case "upload":
+		handleUploadCommand(bot, msg)
 	default:
 		reply := tgbotapi.NewMessage(msg.Chat.ID, "Неизвестная команда 🤔")
 		_, err := bot.Api.Send(reply)
@@ -24,6 +26,51 @@ func handleCommand(bot *Bot, msg *tgbotapi.Message) {
 			log.Printf("Error sending message: %v", err)
 		}
 	}
+}
+
+func handleUploadCommand(bot *Bot, msg *tgbotapi.Message) {
+	// Проверяем авторизацию
+	session, err := bot.oauth.GetUserSession(msg.Chat.ID)
+	if err != nil || session == nil || session.AccessToken == "" {
+		reply := tgbotapi.NewMessage(msg.Chat.ID,
+			"❌ Вы не авторизованы. Используйте /login для авторизации.")
+		bot.Api.Send(reply)
+		return
+	}
+
+	// Сообщаем о начале обработки
+	processingMsg := tgbotapi.NewMessage(msg.Chat.ID,
+		"⏳ Начинаю загрузку медиа файлов в облако...")
+	bot.Api.Send(processingMsg)
+
+	// Обрабатываем медиа файлы
+	publicURL, err := bot.mediaProcessor.ProcessChatMedia(
+		session.AccessToken,
+		msg.Chat.ID,
+		msg.Chat.Title,
+	)
+
+	if err != nil {
+		errorMsg := fmt.Sprintf("❌ Ошибка при загрузке: %v", err)
+		reply := tgbotapi.NewMessage(msg.Chat.ID, errorMsg)
+		bot.Api.Send(reply)
+		return
+	}
+
+	// Отправляем ссылку на публичную папку
+	successMsg := fmt.Sprintf(
+		"✅ Медиа файлы успешно загружены!\n\n"+
+			"📁 Публичная ссылка на папку:\n%s\n\n"+
+			"Вы можете поделиться этой ссылкой с друзьями!",
+		publicURL,
+	)
+
+	reply := tgbotapi.NewMessage(msg.Chat.ID, successMsg)
+	reply.ParseMode = "HTML"
+	bot.Api.Send(reply)
+
+	// Сохраняем информацию о загруженной папке в БД
+	bot.storage.SavePublicFolder(msg.Chat.ID, publicURL)
 }
 
 func handleMessage(bot *Bot, msg *tgbotapi.Message) {

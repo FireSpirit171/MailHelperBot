@@ -2,15 +2,14 @@ package main
 
 import (
 	"database/sql"
+	"github.com/joho/godotenv"
+	_ "github.com/lib/pq"
 	"log"
 	"mail_helper_bot/internal/bot"
 	"mail_helper_bot/internal/pkg/oauth/oauth_service"
 	"mail_helper_bot/internal/pkg/session/postgres_storage"
 	"mail_helper_bot/internal/pkg/web_server/web_server_service"
 	"os"
-
-	"github.com/joho/godotenv"
-	_ "github.com/lib/pq"
 )
 
 func main() {
