@@ -107,6 +107,8 @@ func (b *Bot) handleCommand(msg *tgbotapi.Message) {
 		b.handleGroupStatus(msg)
 	case "my_groups":
 		b.handleMyGroups(msg)
+	case "upload":
+		handleUploadCommand(b, msg)
 	default:
 		reply := tgbotapi.NewMessage(msg.Chat.ID, "Неизвестная команда 🤔")
 		b.Api.Send(reply)

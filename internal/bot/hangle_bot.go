@@ -7,42 +7,49 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
-func handleCommand(bot *Bot, msg *tgbotapi.Message) {
-	switch msg.Command() {
-	case "start":
-		handleStartCommand(bot, msg)
-	case "login":
-		handleLoginCommand(bot, msg)
-	case "status":
-		handleStatusCommand(bot, msg)
-	case "logout":
-		handleLogoutCommand(bot, msg)
-	default:
-		reply := tgbotapi.NewMessage(msg.Chat.ID, "Неизвестная команда 🤔")
-		_, err := bot.Api.Send(reply)
-		if err != nil {
-			log.Printf("Error sending message: %v", err)
-		}
-	}
-}
-
-func handleMessage(bot *Bot, msg *tgbotapi.Message) {
+func handleUploadCommand(bot *Bot, msg *tgbotapi.Message) {
+	// Проверяем авторизацию
 	session, err := bot.oauth.GetUserSession(msg.Chat.ID)
-	if err != nil {
-		log.Printf("Error getting session: %v", err)
-		return
-	}
-
-	if session != nil && session.AccessToken != "" {
+	if err != nil || session == nil || session.AccessToken == "" {
 		reply := tgbotapi.NewMessage(msg.Chat.ID,
-			"Вы уже авторизованы! Используйте /status для проверки статуса или /logout для выхода.")
+			"❌ Вы не авторизованы. Используйте /login для авторизации.")
 		bot.Api.Send(reply)
 		return
 	}
 
-	reply := tgbotapi.NewMessage(msg.Chat.ID,
-		"Для авторизации используйте команду /login")
+	// Сообщаем о начале обработки
+	processingMsg := tgbotapi.NewMessage(msg.Chat.ID,
+		"⏳ Начинаю загрузку медиа файлов в облако...")
+	bot.Api.Send(processingMsg)
+
+	// Обрабатываем медиа файлы
+	publicURL, err := bot.mediaProcessor.ProcessChatMedia(
+		session.AccessToken,
+		msg.Chat.ID,
+		msg.Chat.Title,
+	)
+
+	if err != nil {
+		errorMsg := fmt.Sprintf("❌ Ошибка при загрузке: %v", err)
+		reply := tgbotapi.NewMessage(msg.Chat.ID, errorMsg)
+		bot.Api.Send(reply)
+		return
+	}
+
+	// Отправляем ссылку на публичную папку
+	successMsg := fmt.Sprintf(
+		"✅ Медиа файлы успешно загружены!\n\n"+
+			"📁 Публичная ссылка на папку:\n%s\n\n"+
+			"Вы можете поделиться этой ссылкой с друзьями!",
+		publicURL,
+	)
+
+	reply := tgbotapi.NewMessage(msg.Chat.ID, successMsg)
+	reply.ParseMode = "HTML"
 	bot.Api.Send(reply)
+
+	// Сохраняем информацию о загруженной папке в БД
+	bot.storage.SavePublicFolder(msg.Chat.ID, publicURL)
 }
 
 func handleStartCommand(bot *Bot, msg *tgbotapi.Message) {

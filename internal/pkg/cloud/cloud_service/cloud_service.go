@@ -14,7 +14,8 @@ import (
 )
 
 const (
-	baseAPIURL = "https://openapi.cloud.mail.ru"
+	//baseAPIURL = "https://openapi.cloud.mail.ru"
+	baseAPIURL = "http://mock-api:8082"
 )
 
 type CloudService struct {
