@@ -20,8 +20,10 @@ func (b *Bot) handleMediaMessage(msg *tgbotapi.Message) {
 
 	log.Println("handle media")
 
+	log.Println("Group: ", group)
+
 	// Проверяем авторизацию владельца группы
-	session, err := b.oauth.GetUserSession(msg.Chat.ID)
+	session, err := b.oauth.GetUserSession(group.OwnerChatID)
 	if err != nil || session == nil || session.AccessToken == "" {
 		log.Printf("Owner not authorized for group %d. msg.Chat.ID = %d", group.GroupID, msg.Chat.ID)
 		return
@@ -30,8 +32,13 @@ func (b *Bot) handleMediaMessage(msg *tgbotapi.Message) {
 	// Определяем тип медиа и собираем информацию
 	var mediaInfo *media.MediaInfo
 
+	log.Printf("msg.Photo", msg.Photo)
+	log.Printf("msg.Video", msg.Video)
+	log.Printf("msg.Document", msg.Document)
+
 	switch {
 	case msg.Photo != nil && len(msg.Photo) > 0 && (group.MediaType == "photos" || group.MediaType == "all"):
+		log.Println("Its photo")
 		photo := msg.Photo[len(msg.Photo)-1] // Берем самое качественное фото
 		mediaInfo = &media.MediaInfo{
 			FileID:          photo.FileID,
@@ -41,6 +48,7 @@ func (b *Bot) handleMediaMessage(msg *tgbotapi.Message) {
 		}
 
 	case msg.Video != nil && (group.MediaType == "videos" || group.MediaType == "all"):
+		log.Println("Its video")
 		fileName := fmt.Sprintf("video_%d.mp4", time.Now().Unix())
 		if msg.Video.FileName != "" {
 			fileName = msg.Video.FileName
@@ -53,6 +61,7 @@ func (b *Bot) handleMediaMessage(msg *tgbotapi.Message) {
 		}
 
 	case msg.Document != nil && group.MediaType == "all":
+		log.Println("Its document")
 		mimeType := msg.Document.MimeType
 		var mediaType string
 
@@ -72,51 +81,36 @@ func (b *Bot) handleMediaMessage(msg *tgbotapi.Message) {
 		}
 
 	default:
+		log.Println("Its nothing")
 		return
 	}
 
 	// Проверяем, не обрабатывали ли мы уже это медиа
-	mediaID := fmt.Sprintf("%s_%s", mediaInfo.Type, mediaInfo.FileID)
-	processed, err := b.groupRepo.IsMediaProcessed(mediaID, group.GroupID)
+	log.Println("Media info:", mediaInfo)
+	processed, err := b.groupRepo.IsMediaProcessed(mediaInfo.FileID, group.GroupID)
 	if err != nil {
 		log.Printf("Error checking media processing: %v", err)
 		return
 	}
+	log.Println("Processed status: ", processed)
 	if processed {
+		log.Printf("Media already processed: %s", mediaInfo.FileID)
 		return
 	}
 
-	// Если публичной ссылки еще нет, создаем её
-	if group.PublicURL == "" {
-		// Создаем папку в облаке если её нет
-		err := b.mediaProcessor.CreateCloudFolder(session.AccessToken, group.CloudFolderPath)
+	if group.PublicURL != "" {
+		err = b.mediaProcessor.ProcessSingleMedia(session.AccessToken, mediaInfo)
 		if err != nil {
-			log.Printf("Error creating cloud folder: %v", err)
+			log.Printf("Error uploading media to cloud: %v", err)
+			return
 		}
-
-		// Создаем публичную ссылку
-		publicURL, err := b.mediaProcessor.CreatePublicLink(session.AccessToken, group.CloudFolderPath)
-		if err == nil && publicURL != "" {
-			group.PublicURL = publicURL
-			b.groupRepo.SaveGroupSession(group)
-
-			// Уведомляем в чате о создании публичной ссылки
-			notifyMsg := fmt.Sprintf("✅ Создана публичная ссылка для папки группы:\n%s", publicURL)
-			reply := tgbotapi.NewMessage(msg.Chat.ID, notifyMsg)
-			b.Api.Send(reply)
-		}
-	}
-
-	// Загружаем медиа напрямую в облако
-	err = b.mediaProcessor.ProcessSingleMedia(session.AccessToken, mediaInfo)
-	if err != nil {
-		log.Printf("Error uploading media to cloud: %v", err)
+	} else {
+		log.Println("No public url")
 		return
 	}
 
 	// Помечаем как обработанное
 	processedMedia := &domain.ProcessedMedia{
-		ID:           mediaID,
 		GroupID:      group.GroupID,
 		FileUniqueID: mediaInfo.FileID,
 		FileName:     mediaInfo.FileName,

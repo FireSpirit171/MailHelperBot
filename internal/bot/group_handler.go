@@ -12,6 +12,33 @@ func (b *Bot) handleBotAddedToGroup(msg *tgbotapi.Message) {
 	chat := msg.Chat
 	user := msg.From
 
+	session, err := b.oauth.GetUserSession(user.ID)
+	if err != nil || session == nil || session.AccessToken == "" {
+		log.Printf("User %d is not authorized for group %d", user.ID, chat.ID)
+
+		groupMsg := fmt.Sprintf(`👋 Привет! Я бот для выгрузки медиа в облако Mail.ru.
+
+❌ ДЛЯ НАСТРОЙКИ БОТА НЕОБХОДИМО АВТОРИЗОВАТЬСЯ
+
+Администратор %s, пожалуйста:
+
+1. Перейдите в личный чат с ботом @%s
+2. Используйте команду /login для авторизации
+3. После авторизации добавьте бота в группу заново или используйте /bot_settings здесь
+
+После авторизации бот автоматически предложит настройку типа медиа.`,
+			user.FirstName,
+			b.Api.Self.UserName)
+
+		reply := tgbotapi.NewMessage(chat.ID, groupMsg)
+		// Убираем ParseMode вообще
+		_, err := b.Api.Send(reply)
+		if err != nil {
+			log.Printf("Error sending message: %v", err)
+		}
+		return
+	}
+
 	member, err := b.Api.GetChatMember(tgbotapi.GetChatMemberConfig{
 		ChatConfigWithUser: tgbotapi.ChatConfigWithUser{
 			ChatID: chat.ID,
@@ -52,6 +79,24 @@ func (b *Bot) handleBotAddedToGroup(msg *tgbotapi.Message) {
 
 	// Отправляем сообщение с выбором типа медиа
 	b.sendMediaTypeSelection(chat.ID)
+}
+
+func (b *Bot) sendAuthRequiredMessage(userID int64, groupTitle string) {
+	text := fmt.Sprintf(`🔐 Требуется авторизация для группы "%s"
+
+Для настройки бота в группе необходимо авторизоваться через Mail.ru.
+
+Пожалуйста:
+
+1. Используйте команду /login ниже для авторизации
+2. После успешной авторизации
+3. Вернитесь в группу "%s"
+4. Добавьте бота заново или используйте команду /bot_settings
+
+После авторизации бот автоматически определит группу и предложит настройку.`, groupTitle, groupTitle)
+
+	msg := tgbotapi.NewMessage(userID, text)
+	b.Api.Send(msg)
 }
 
 func (b *Bot) isUserAdmin(member tgbotapi.ChatMember) bool {

@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"fmt"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"log"
 	"mail_helper_bot/internal/pkg/group/repository"
@@ -81,6 +82,16 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 }
 
 func (b *Bot) handleCommand(msg *tgbotapi.Message) {
+	// Определяем доступные команды в зависимости от типа чата
+	if msg.Chat.IsGroup() || msg.Chat.IsSuperGroup() {
+		b.handleGroupCommand(msg)
+	} else {
+		b.handlePrivateCommand(msg)
+	}
+}
+
+// handlePrivateCommand обрабатывает команды в личном чате
+func (b *Bot) handlePrivateCommand(msg *tgbotapi.Message) {
 	switch msg.Command() {
 	case "start":
 		handleStartCommand(b, msg)
@@ -90,12 +101,36 @@ func (b *Bot) handleCommand(msg *tgbotapi.Message) {
 		handleStatusCommand(b, msg)
 	case "logout":
 		handleLogoutCommand(b, msg)
-	case "group_status":
-		b.handleGroupStatus(msg)
 	case "my_groups":
 		b.handleMyGroups(msg)
 	default:
 		reply := tgbotapi.NewMessage(msg.Chat.ID, "Неизвестная команда 🤔")
+		b.Api.Send(reply)
+	}
+}
+
+// handleGroupCommand обрабатывает команды в группе
+func (b *Bot) handleGroupCommand(msg *tgbotapi.Message) {
+	switch msg.Command() {
+	case "group_status":
+		b.handleGroupStatus(msg)
+	case "share":
+		b.handleShareCommand(msg)
+	case "setup_group": // НОВАЯ КОМАНДА
+		b.handleSetupGroup(msg)
+	case "bot_settings":
+		b.handleBotSettings(msg) // Оставляем для администраторов
+	case "start":
+		// В группе команда start работает как добавление бота
+		b.handleBotAddedToGroup(msg)
+	default:
+		reply := tgbotapi.NewMessage(msg.Chat.ID,
+			"❌ Эта команда недоступна в группах.\n\n"+
+				"📋 Доступные команды:\n"+
+				"/group_status - Статус группы\n"+
+				"/share - Публичная ссылка (только для администратора)\n"+
+				"/bot_settings - Настройки (только для администратора)"+
+				"/setup_group - Принудительная настройка")
 		b.Api.Send(reply)
 	}
 }
@@ -107,10 +142,37 @@ func (b *Bot) handleCallback(query *tgbotapi.CallbackQuery) {
 
 	if strings.HasPrefix(data, "media_type:") {
 		b.handleMediaTypeSelection(chatID, data, messageID)
+	} else if strings.HasPrefix(data, "media_type_settings:") {
+		b.handleMediaTypeSettings(chatID, data, messageID)
+	} else if strings.HasPrefix(data, "refresh_stats:") {
+		b.handleRefreshStats(chatID, data, messageID)
+	} else if strings.HasPrefix(data, "copy_link:") {
+		b.handleCopyLink(chatID, data, messageID)
 	}
 
 	callback := tgbotapi.NewCallback(query.ID, "")
 	b.Api.Request(callback)
+}
+
+func (b *Bot) handleCopyLink(chatID int64, data string, messageID int) {
+	// Формат: copy_link:{url}
+	parts := strings.Split(data, ":")
+	if len(parts) < 2 {
+		return
+	}
+
+	// Восстанавливаем URL (может содержать ://)
+	url := strings.Join(parts[1:], ":")
+
+	// Отправляем сообщение о успешном копировании
+	text := fmt.Sprintf("✅ Ссылка скопирована в буфер обмена!\n\n`%s`", url)
+
+	editMsg := tgbotapi.NewEditMessageText(chatID, messageID, text)
+	editMsg.ParseMode = "Markdown"
+	b.Api.Send(editMsg)
+
+	// К сожалению, Telegram Bot API не поддерживает прямое копирование в буфер
+	// Поэтому просто показываем ссылку для ручного копирования
 }
 
 func (b *Bot) handleChatMemberUpdate(update *tgbotapi.ChatMemberUpdated) {
@@ -130,4 +192,74 @@ func (b *Bot) handleChatMemberUpdate(update *tgbotapi.ChatMemberUpdated) {
 
 func (b *Bot) containsMedia(msg *tgbotapi.Message) bool {
 	return msg.Photo != nil || msg.Video != nil || msg.Document != nil
+}
+
+func (b *Bot) sendErrorMessage(chatID int64, message string) {
+	msg := tgbotapi.NewMessage(chatID, message)
+	b.Api.Send(msg)
+}
+
+func (b *Bot) handleMediaTypeSettings(chatID int64, data string, messageID int) {
+	// Формат: media_type_settings:{groupID}:{mediaType}
+	parts := strings.Split(data, ":")
+	if len(parts) != 3 {
+		return
+	}
+
+	var groupID int64
+	fmt.Sscanf(parts[1], "%d", &groupID)
+	mediaType := parts[2]
+
+	// Обновляем настройки группы
+	group, err := b.groupRepo.GetGroupSession(groupID)
+	if err != nil || group == nil {
+		b.sendErrorMessage(chatID, "❌ Группа не найдена")
+		return
+	}
+
+	group.MediaType = mediaType
+	if err := b.groupRepo.SaveGroupSession(group); err != nil {
+		log.Printf("Error updating group media type: %v", err)
+		b.sendErrorMessage(chatID, "❌ Ошибка при сохранении настроек")
+		return
+	}
+
+	// Обновляем сообщение
+	mediaTypeText := map[string]string{
+		"photos": "📷 фото",
+		"videos": "🎥 видео",
+		"all":    "📷🎥 все медиафайлы",
+	}
+
+	text := fmt.Sprintf("✅ Настройки обновлены!\n\nГруппа: %s\nНовый тип медиа: %s\n\nБот теперь будет загружать %s в ваше облако Mail.ru.",
+		group.GroupTitle,
+		mediaTypeText[mediaType],
+		mediaTypeText[mediaType])
+
+	editMsg := tgbotapi.NewEditMessageText(chatID, messageID, text)
+	b.Api.Send(editMsg)
+}
+
+// handleRefreshStats обновляет статистику группы
+func (b *Bot) handleRefreshStats(chatID int64, data string, messageID int) {
+	parts := strings.Split(data, ":")
+	if len(parts) != 2 {
+		return
+	}
+
+	var groupID int64
+	fmt.Sscanf(parts[1], "%d", &groupID)
+
+	// Переотправляем сообщение с обновленной статистикой
+	group, err := b.groupRepo.GetGroupSession(groupID)
+	if err != nil || group == nil {
+		b.sendErrorMessage(chatID, "❌ Группа не найдена")
+		return
+	}
+
+	b.showCurrentSettingsWithOptions(chatID, group)
+
+	// Удаляем старое сообщение
+	deleteMsg := tgbotapi.NewDeleteMessage(chatID, messageID)
+	b.Api.Send(deleteMsg)
 }

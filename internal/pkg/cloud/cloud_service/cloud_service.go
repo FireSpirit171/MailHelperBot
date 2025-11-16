@@ -37,12 +37,25 @@ type UploadResponse struct {
 }
 
 type ShareResponse struct {
-	Email string `json:"email"`
-	Body  struct {
-		Url string `json:"url"`
-	} `json:"body"`
-	Time   int64 `json:"time"`
-	Status int   `json:"status"`
+	Ctime     int    `json:"ctime"`
+	Downloads int    `json:"downloads"`
+	Expires   int    `json:"expires"`
+	ExtID     string `json:"extid"`
+	Flags     struct {
+		SEOIndexed      bool `json:"SEO_INDEXED"`
+		Commentable     bool `json:"commentable"`
+		Domestic        bool `json:"domestic"`
+		EmailListAccess bool `json:"email_list_access"`
+		Writable        bool `json:"writable"`
+	} `json:"flags"`
+	ID      string `json:"id"`
+	Mode    string `json:"mode"`
+	Name    string `json:"name"`
+	Owner   bool   `json:"owner"`
+	Type    string `json:"type"`
+	Unknown bool   `json:"unknown"`
+	URL     string `json:"url"`
+	Views   int    `json:"views"`
 }
 
 func NewCloudService() *CloudService {
@@ -157,7 +170,9 @@ func (cs *CloudService) CreatePublicLink(accessToken, folderPath string) (string
 		return "", fmt.Errorf("failed to parse response: %v", err)
 	}
 
-	return shareResp.Body.Url, nil
+	fmt.Printf("Responce: %s", shareResp)
+
+	return shareResp.URL, nil // Используем URL напрямую, а не shareResp.Body.Url
 }
 
 // RemovePublicLink удаляет публичную ссылку
