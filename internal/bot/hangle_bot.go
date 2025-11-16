@@ -7,58 +7,15 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
-func handleUploadCommand(bot *Bot, msg *tgbotapi.Message) {
-	// Проверяем авторизацию
-	session, err := bot.oauth.GetUserSession(msg.Chat.ID)
-	if err != nil || session == nil || session.AccessToken == "" {
-		reply := tgbotapi.NewMessage(msg.Chat.ID,
-			"❌ Вы не авторизованы. Используйте /login для авторизации.")
-		bot.Api.Send(reply)
-		return
-	}
-
-	// Сообщаем о начале обработки
-	processingMsg := tgbotapi.NewMessage(msg.Chat.ID,
-		"⏳ Начинаю загрузку медиа файлов в облако...")
-	bot.Api.Send(processingMsg)
-
-	// Обрабатываем медиа файлы
-	publicURL, err := bot.mediaProcessor.ProcessChatMedia(
-		session.AccessToken,
-		msg.Chat.ID,
-		msg.Chat.Title,
-	)
-
-	if err != nil {
-		errorMsg := fmt.Sprintf("❌ Ошибка при загрузке: %v", err)
-		reply := tgbotapi.NewMessage(msg.Chat.ID, errorMsg)
-		bot.Api.Send(reply)
-		return
-	}
-
-	// Отправляем ссылку на публичную папку
-	successMsg := fmt.Sprintf(
-		"✅ Медиа файлы успешно загружены!\n\n"+
-			"📁 Публичная ссылка на папку:\n%s\n\n"+
-			"Вы можете поделиться этой ссылкой с друзьями!",
-		publicURL,
-	)
-
-	reply := tgbotapi.NewMessage(msg.Chat.ID, successMsg)
-	reply.ParseMode = "HTML"
-	bot.Api.Send(reply)
-
-	// Сохраняем информацию о загруженной папке в БД
-	bot.storage.SavePublicFolder(msg.Chat.ID, publicURL)
-}
-
 func handleStartCommand(bot *Bot, msg *tgbotapi.Message) {
 	text := `Привет! Я бот.
 
 Доступные команды:
 /login - Авторизация через Mail.ru
 /status - Проверить статус авторизации
-/logout - Выйти из аккаунта`
+/logout - Выйти из аккаунта
+/my_groups - Показывает список групп, где активен бот
+/group_status - Показывает статус по загрузка медиа файлов группы`
 
 	reply := tgbotapi.NewMessage(msg.Chat.ID, text)
 	_, err := bot.Api.Send(reply)
@@ -130,7 +87,7 @@ func handleStatusCommand(bot *Bot, msg *tgbotapi.Message) {
 	if err != nil {
 		newToken, err := bot.oauth.RefreshToken(session.RefreshToken)
 		if err != nil {
-			bot.storage.DeleteSession(msg.Chat.ID)
+			bot.storage.Logout(msg.Chat.ID)
 			reply := tgbotapi.NewMessage(msg.Chat.ID,
 				"Сессия устарела. Пожалуйста, авторизуйтесь снова с помощью /login")
 			bot.Api.Send(reply)
@@ -150,7 +107,7 @@ func handleStatusCommand(bot *Bot, msg *tgbotapi.Message) {
 }
 
 func handleLogoutCommand(bot *Bot, msg *tgbotapi.Message) {
-	err := bot.storage.DeleteSession(msg.Chat.ID)
+	err := bot.storage.Logout(msg.Chat.ID)
 	if err != nil {
 		log.Printf("Error deleting session: %v", err)
 		reply := tgbotapi.NewMessage(msg.Chat.ID,

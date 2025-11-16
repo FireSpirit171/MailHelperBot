@@ -6,8 +6,6 @@ import (
 	"mail_helper_bot/internal/pkg/group/repository"
 	"mail_helper_bot/internal/pkg/media"
 	"mail_helper_bot/internal/pkg/oauth/oauth_service"
-	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -16,7 +14,6 @@ type Bot struct {
 	oauth          *oauth_service.OAuthService
 	storage        oauth_service.Storage
 	groupRepo      repository.GroupRepository
-	bufferPath     string
 	mediaProcessor *media.MediaProcessor
 }
 
@@ -26,22 +23,14 @@ func New(token string, storage oauth_service.Storage, groupRepo repository.Group
 		log.Fatalf("failed to create bot: %v", err)
 	}
 
-	// Создаем папку для буфера
-	bufferPath := "./buffer"
-	if err := os.MkdirAll(bufferPath, 0755); err != nil {
-		log.Fatalf("failed to create buffer directory: %v", err)
-	}
-
 	return &Bot{
 		Api:            bot,
 		storage:        storage,
 		groupRepo:      groupRepo,
-		bufferPath:     bufferPath,
-		mediaProcessor: media.NewMediaProcessor("./buffer"),
+		mediaProcessor: media.NewMediaProcessor(bot),
 	}
 }
 
-// todo: окак(вынести в New)
 func (b *Bot) SetOAuthService(oauth *oauth_service.OAuthService) {
 	b.oauth = oauth
 }
@@ -71,7 +60,6 @@ func (b *Bot) Start() {
 }
 
 func (b *Bot) handleMessage(msg *tgbotapi.Message) {
-	// Обработка команд
 	log.Println("handle message:", msg)
 	if msg.IsCommand() {
 		log.Println("handle command:", msg)
@@ -79,14 +67,13 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 		return
 	}
 
-	// Обработка добавления бота в группу
 	if (msg.Chat.IsGroup() || msg.Chat.IsSuperGroup()) &&
 		strings.Contains(msg.Text, "@"+b.Api.Self.UserName) {
 		log.Println("handle add:", msg)
 		b.handleBotAddedToGroup(msg)
 		return
 	}
-	// Обработка медиафайлов
+
 	if b.containsMedia(msg) {
 		log.Println("handle media:", msg)
 		b.handleMediaMessage(msg)
@@ -107,8 +94,6 @@ func (b *Bot) handleCommand(msg *tgbotapi.Message) {
 		b.handleGroupStatus(msg)
 	case "my_groups":
 		b.handleMyGroups(msg)
-	case "upload":
-		handleUploadCommand(b, msg)
 	default:
 		reply := tgbotapi.NewMessage(msg.Chat.ID, "Неизвестная команда 🤔")
 		b.Api.Send(reply)
@@ -124,16 +109,13 @@ func (b *Bot) handleCallback(query *tgbotapi.CallbackQuery) {
 		b.handleMediaTypeSelection(chatID, data, messageID)
 	}
 
-	// Подтверждаем обработку callback
 	callback := tgbotapi.NewCallback(query.ID, "")
 	b.Api.Request(callback)
 }
 
 func (b *Bot) handleChatMemberUpdate(update *tgbotapi.ChatMemberUpdated) {
-	// Обрабатываем добавление/удаление бота из чата
 	if update.NewChatMember.User.ID == b.Api.Self.ID {
 		if update.NewChatMember.Status == "member" {
-			// Бот добавлен в группу
 			msg := &tgbotapi.Message{
 				Chat: &update.Chat,
 				From: &update.From,
@@ -141,21 +123,11 @@ func (b *Bot) handleChatMemberUpdate(update *tgbotapi.ChatMemberUpdated) {
 			}
 			b.handleBotAddedToGroup(msg)
 		} else if update.NewChatMember.Status == "left" || update.NewChatMember.Status == "kicked" {
-			// Бот удален из группы
 			b.groupRepo.DeleteGroupSession(update.Chat.ID)
 		}
 	}
 }
 
-// Проверка наличия медиа в сообщении
 func (b *Bot) containsMedia(msg *tgbotapi.Message) bool {
 	return msg.Photo != nil || msg.Video != nil || msg.Document != nil
-}
-
-func (b *Bot) createGroupBufferFolder(groupID int64) (string, error) {
-	groupPath := filepath.Join(b.bufferPath, string(rune(groupID)))
-	if err := os.MkdirAll(groupPath, 0755); err != nil {
-		return "", err
-	}
-	return groupPath, nil
 }

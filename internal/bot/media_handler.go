@@ -2,62 +2,73 @@ package bot
 
 import (
 	"fmt"
-	"io"
 	"log"
-	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"mail_helper_bot/internal/pkg/group/domain"
+	"mail_helper_bot/internal/pkg/media"
 )
 
-// Обработчик медиафайлов
 func (b *Bot) handleMediaMessage(msg *tgbotapi.Message) {
 	// Проверяем, есть ли настройки для этой группы
 	group, err := b.groupRepo.GetGroupSession(msg.Chat.ID)
 	if err != nil || group == nil {
 		return
 	}
+
 	log.Println("handle media")
-	// Проверяем тип медиа
-	var mediaType string
-	var fileID string
-	var fileName string
+
+	// Проверяем авторизацию владельца группы
+	session, err := b.oauth.GetUserSession(msg.Chat.ID)
+	if err != nil || session == nil || session.AccessToken == "" {
+		log.Printf("Owner not authorized for group %d. msg.Chat.ID = %d", group.GroupID, msg.Chat.ID)
+		return
+	}
+
+	// Определяем тип медиа и собираем информацию
+	var mediaInfo *media.MediaInfo
 
 	switch {
 	case msg.Photo != nil && len(msg.Photo) > 0 && (group.MediaType == "photos" || group.MediaType == "all"):
-		// Берем последнее (самое качественное) фото
-		photo := msg.Photo[len(msg.Photo)-1]
-		fileID = photo.FileID
-		mediaType = "photo"
-		fileName = fmt.Sprintf("photo_%d.jpg", time.Now().Unix())
+		photo := msg.Photo[len(msg.Photo)-1] // Берем самое качественное фото
+		mediaInfo = &media.MediaInfo{
+			FileID:          photo.FileID,
+			Type:            "photo",
+			FileName:        fmt.Sprintf("photo_%d.jpg", time.Now().Unix()),
+			CloudFolderPath: group.CloudFolderPath,
+		}
 
 	case msg.Video != nil && (group.MediaType == "videos" || group.MediaType == "all"):
-		fileID = msg.Video.FileID
-		mediaType = "video"
-		fileName = fmt.Sprintf("video_%d.mp4", time.Now().Unix())
+		fileName := fmt.Sprintf("video_%d.mp4", time.Now().Unix())
 		if msg.Video.FileName != "" {
 			fileName = msg.Video.FileName
 		}
+		mediaInfo = &media.MediaInfo{
+			FileID:          msg.Video.FileID,
+			Type:            "video",
+			FileName:        fileName,
+			CloudFolderPath: group.CloudFolderPath,
+		}
 
 	case msg.Document != nil && group.MediaType == "all":
-		// Проверяем, является ли документ изображением или видео
 		mimeType := msg.Document.MimeType
+		var mediaType string
+
 		if strings.HasPrefix(mimeType, "image/") {
 			mediaType = "photo"
-			fileName = fmt.Sprintf("image_%d%s", time.Now().Unix(), filepath.Ext(msg.Document.FileName))
 		} else if strings.HasPrefix(mimeType, "video/") {
 			mediaType = "video"
-			fileName = fmt.Sprintf("video_%d%s", time.Now().Unix(), filepath.Ext(msg.Document.FileName))
 		} else {
-			return // Пропускаем другие типы документов
+			return
 		}
-		fileID = msg.Document.FileID
-		if msg.Document.FileName != "" {
-			fileName = msg.Document.FileName
+
+		mediaInfo = &media.MediaInfo{
+			FileID:          msg.Document.FileID,
+			Type:            mediaType,
+			FileName:        msg.Document.FileName,
+			CloudFolderPath: group.CloudFolderPath,
 		}
 
 	default:
@@ -65,7 +76,7 @@ func (b *Bot) handleMediaMessage(msg *tgbotapi.Message) {
 	}
 
 	// Проверяем, не обрабатывали ли мы уже это медиа
-	mediaID := fmt.Sprintf("%s_%s", mediaType, fileID)
+	mediaID := fmt.Sprintf("%s_%s", mediaInfo.Type, mediaInfo.FileID)
 	processed, err := b.groupRepo.IsMediaProcessed(mediaID, group.GroupID)
 	if err != nil {
 		log.Printf("Error checking media processing: %v", err)
@@ -75,64 +86,46 @@ func (b *Bot) handleMediaMessage(msg *tgbotapi.Message) {
 		return
 	}
 
-	// Получаем информацию о файле
-	file, err := b.Api.GetFile(tgbotapi.FileConfig{FileID: fileID})
-	if err != nil {
-		log.Printf("Error getting file info: %v", err)
-		return
+	// Если публичной ссылки еще нет, создаем её
+	if group.PublicURL == "" {
+		// Создаем папку в облаке если её нет
+		err := b.mediaProcessor.CreateCloudFolder(session.AccessToken, group.CloudFolderPath)
+		if err != nil {
+			log.Printf("Error creating cloud folder: %v", err)
+		}
+
+		// Создаем публичную ссылку
+		publicURL, err := b.mediaProcessor.CreatePublicLink(session.AccessToken, group.CloudFolderPath)
+		if err == nil && publicURL != "" {
+			group.PublicURL = publicURL
+			b.groupRepo.SaveGroupSession(group)
+
+			// Уведомляем в чате о создании публичной ссылки
+			notifyMsg := fmt.Sprintf("✅ Создана публичная ссылка для папки группы:\n%s", publicURL)
+			reply := tgbotapi.NewMessage(msg.Chat.ID, notifyMsg)
+			b.Api.Send(reply)
+		}
 	}
 
-	// Скачиваем файл в папку группы
-	_, err = b.downloadFileToGroup(file, group.GroupID, fileName)
+	// Загружаем медиа напрямую в облако
+	err = b.mediaProcessor.ProcessSingleMedia(session.AccessToken, mediaInfo)
 	if err != nil {
-		log.Printf("Error downloading file: %v", err)
+		log.Printf("Error uploading media to cloud: %v", err)
 		return
 	}
 
 	// Помечаем как обработанное
 	processedMedia := &domain.ProcessedMedia{
-		MediaID:   mediaID,
-		GroupID:   group.GroupID,
-		FileID:    fileID,
-		FileName:  fileName,
-		MediaType: mediaType,
+		ID:           mediaID,
+		GroupID:      group.GroupID,
+		FileUniqueID: mediaInfo.FileID,
+		FileName:     mediaInfo.FileName,
+		MediaType:    mediaInfo.Type,
 	}
+
 	if err := b.groupRepo.SaveProcessedMedia(processedMedia); err != nil {
 		log.Printf("Error saving processed media: %v", err)
 	}
 
-	log.Printf("Successfully saved media: %s to group: %d", fileName, group.GroupID)
-}
-
-// Скачивание файла в папку группы
-func (b *Bot) downloadFileToGroup(file tgbotapi.File, groupID int64, fileName string) (string, error) {
-	url := fmt.Sprintf("https://api.telegram.org/file/bot%s/%s", b.Api.Token, file.FilePath)
-
-	resp, err := http.Get(url)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	// Создаем папку группы, если не существует
-	groupPath := b.getGroupBufferPath(groupID)
-	if err := os.MkdirAll(groupPath, 0755); err != nil {
-		return "", err
-	}
-
-	// Создаем файл в папке группы
-	localPath := filepath.Join(groupPath, fileName)
-	out, err := os.Create(localPath)
-	if err != nil {
-		return "", err
-	}
-	defer out.Close()
-
-	_, err = io.Copy(out, resp.Body)
-	return localPath, err
-}
-
-// Получает путь к папке группы
-func (b *Bot) getGroupBufferPath(groupID int64) string {
-	return filepath.Join(b.bufferPath, fmt.Sprintf("%d", groupID))
+	log.Printf("Successfully uploaded media: %s to cloud folder: %s", mediaInfo.FileName, group.CloudFolderPath)
 }

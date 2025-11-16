@@ -2,120 +2,85 @@ package media
 
 import (
 	"fmt"
-	"io/ioutil"
-	"mail_helper_bot/internal/pkg/cloud/cloud_service"
-	"os"
-	"path/filepath"
+	"io"
+	"net/http"
 	"strings"
-	"time"
+
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"mail_helper_bot/internal/pkg/cloud/cloud_service"
 )
+
+type MediaInfo struct {
+	FileID          string
+	Type            string // "photo" or "video"
+	FileName        string
+	CloudFolderPath string
+}
 
 type MediaProcessor struct {
 	cloudService *cloud_service.CloudService
-	bufferPath   string
+	botAPI       *tgbotapi.BotAPI
 }
 
-func NewMediaProcessor(bufferPath string) *MediaProcessor {
-	if bufferPath == "" {
-		bufferPath = "./buffer"
-	}
-
+func NewMediaProcessor(botAPI *tgbotapi.BotAPI) *MediaProcessor {
 	return &MediaProcessor{
 		cloudService: cloud_service.NewCloudService(),
-		bufferPath:   bufferPath,
+		botAPI:       botAPI,
 	}
 }
 
-// ProcessChatMedia обрабатывает медиа файлы из чата
-func (mp *MediaProcessor) ProcessChatMedia(accessToken string, chatID int64, chatName string) (string, error) {
-	// Генерируем уникальное имя папки для чата
-	folderName := mp.generateFolderName(chatID, chatName)
-
-	// Создаем папку в облаке
-	err := mp.cloudService.CreateFolder(accessToken, folderName)
-	if err != nil {
-		return "", fmt.Errorf("failed to create cloud folder: %v", err)
-	}
-
-	// Получаем список файлов из буферной папки
-	chatBufferPath := filepath.Join(mp.bufferPath, fmt.Sprintf("%d", chatID))
-	files, err := mp.getFilesFromBuffer(chatBufferPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to get files from buffer: %v", err)
-	}
-
-	// Загружаем каждый файл в облако
-	uploadedCount := 0
-	for _, file := range files {
-		cloudPath := filepath.Join(folderName, filepath.Base(file))
-		err := mp.cloudService.UploadFile(accessToken, file, cloudPath)
-		if err != nil {
-			// Логируем ошибку, но продолжаем загрузку других файлов
-			fmt.Printf("Failed to upload file %s: %v\n", file, err)
-			continue
-		}
-		uploadedCount++
-	}
-
-	if uploadedCount == 0 {
-		return "", fmt.Errorf("no files were uploaded")
-	}
-
-	// Создаем публичную ссылку
-	publicURL, err := mp.cloudService.CreatePublicLink(accessToken, folderName)
-	if err != nil {
-		return "", fmt.Errorf("failed to create public link: %v", err)
-	}
-
-	// Очищаем буферную папку после успешной загрузки
-	mp.cleanupBuffer(chatBufferPath)
-
-	return publicURL, nil
-}
-
-// generateFolderName генерирует уникальное имя папки
-func (mp *MediaProcessor) generateFolderName(chatID int64, chatName string) string {
-	timestamp := time.Now().Format("2006-01-02_15-04")
-	safeName := strings.ReplaceAll(chatName, " ", "_")
+// GenerateCloudFolderPath генерирует путь к папке в облаке для группы
+func (mp *MediaProcessor) GenerateCloudFolderPath(groupID int64, groupName string) string {
+	safeName := strings.ReplaceAll(groupName, " ", "_")
 	safeName = strings.ReplaceAll(safeName, "/", "_")
-	return fmt.Sprintf("chat_%d_%s_%s", chatID, safeName, timestamp)
+	safeName = strings.ReplaceAll(safeName, "\\", "_")
+	safeName = strings.ReplaceAll(safeName, ":", "_")
+	return fmt.Sprintf("telegram_group_%d_%s", groupID, safeName)
 }
 
-// getFilesFromBuffer получает список файлов из буферной папки
-func (mp *MediaProcessor) getFilesFromBuffer(bufferPath string) ([]string, error) {
-	var files []string
+// CreateCloudFolder создает папку в облаке
+func (mp *MediaProcessor) CreateCloudFolder(accessToken string, folderPath string) error {
+	return mp.cloudService.CreateFolder(accessToken, folderPath)
+}
 
-	// Проверяем существование папки
-	if _, err := os.Stat(bufferPath); os.IsNotExist(err) {
-		return files, fmt.Errorf("buffer folder does not exist: %s", bufferPath)
-	}
+// CreatePublicLink создает публичную ссылку на папку
+func (mp *MediaProcessor) CreatePublicLink(accessToken string, folderPath string) (string, error) {
+	return mp.cloudService.CreatePublicLink(accessToken, folderPath)
+}
 
-	// Читаем содержимое папки
-	entries, err := ioutil.ReadDir(bufferPath)
+// ProcessSingleMedia загружает одиночный медиа файл напрямую в облако
+func (mp *MediaProcessor) ProcessSingleMedia(accessToken string, mediaInfo *MediaInfo) error {
+	// Получаем файл из Telegram
+	fileConfig := tgbotapi.FileConfig{FileID: mediaInfo.FileID}
+	file, err := mp.botAPI.GetFile(fileConfig)
 	if err != nil {
-		return files, err
+		return fmt.Errorf("failed to get file from Telegram: %v", err)
 	}
 
-	// Фильтруем только медиа файлы
-	allowedExtensions := []string{".jpg", ".jpeg", ".png", ".gif", ".mp4", ".avi", ".mov", ".webp"}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
+	// Получаем URL для скачивания файла
+	fileURL := fmt.Sprintf("https://api.telegram.org/file/bot%s/%s", mp.botAPI.Token, file.FilePath)
 
-		ext := strings.ToLower(filepath.Ext(entry.Name()))
-		for _, allowedExt := range allowedExtensions {
-			if ext == allowedExt {
-				files = append(files, filepath.Join(bufferPath, entry.Name()))
-				break
-			}
-		}
+	// Скачиваем файл из Telegram
+	resp, err := http.Get(fileURL)
+	if err != nil {
+		return fmt.Errorf("failed to download file from Telegram: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Читаем содержимое файла
+	fileData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read file content: %v", err)
 	}
 
-	return files, nil
-}
+	// Формируем полный путь к файлу в облаке
+	cloudFilePath := fmt.Sprintf("%s/%s", mediaInfo.CloudFolderPath, mediaInfo.FileName)
 
-// cleanupBuffer очищает буферную папку
-func (mp *MediaProcessor) cleanupBuffer(bufferPath string) error {
-	return os.RemoveAll(bufferPath)
+	// Загружаем файл в облако
+	err = mp.cloudService.UploadFileFromBytes(accessToken, fileData, cloudFilePath)
+	if err != nil {
+		return fmt.Errorf("failed to upload file to cloud: %v", err)
+	}
+
+	return nil
 }

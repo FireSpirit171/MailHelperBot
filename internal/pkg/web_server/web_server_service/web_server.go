@@ -63,6 +63,7 @@ func (ws *WebServer) handleOAuthCallback(w http.ResponseWriter, r *http.Request)
 	}
 
 	chatID, err := ws.oauth.ValidateState(state)
+	log.Printf("chatID seccessfully extracted - %v", chatID)
 	if err != nil {
 		log.Printf("Invalid state: %v", err)
 		ws.sendErrorResponse(w, "Неверный или просроченный state параметр")

@@ -6,15 +6,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"mail_helper_bot/internal/pkg/http_client"
 	"mail_helper_bot/internal/pkg/session/domain"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
+	"time"
 )
 
-// todo: нормально распределить структуры и методы
 type UserInfo struct {
 	ID        string `json:"id"`
 	ClientID  string `json:"client_id"`
@@ -69,6 +70,7 @@ func (s *OAuthService) GenerateAuthURL(chatID int64) (string, string, error) {
 	}
 
 	err = s.storage.SaveState(state, chatID)
+	log.Printf("Successfully saved state: %v", state)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to save state: %v", err)
 	}
@@ -125,6 +127,7 @@ func (s *OAuthService) ExchangeCodeForToken(code, state string) (*TokenResponse,
 		return nil, err
 	}
 
+	// Удаляем использованный state
 	s.storage.DeleteState(state)
 
 	return &tokenResp, nil
@@ -203,18 +206,38 @@ func (s *OAuthService) GetUserInfo(accessToken string) (*UserInfo, error) {
 }
 
 func (s *OAuthService) SaveUserSession(chatID int64, tokenResp *TokenResponse, userInfo *UserInfo) error {
+	var expiresAt *time.Time
+	if tokenResp.ExpiresIn > 0 {
+		exp := time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
+		expiresAt = &exp
+	}
+
 	session := &domain.UserSession{
-		ChatID:       chatID,
-		AccessToken:  tokenResp.AccessToken,
-		RefreshToken: tokenResp.RefreshToken,
-		Email:        userInfo.Email,
-		Name:         userInfo.Name,
+		ChatID:         chatID,
+		AccessToken:    tokenResp.AccessToken,
+		RefreshToken:   tokenResp.RefreshToken,
+		Email:          userInfo.Email,
+		Name:           userInfo.Name,
+		TokenExpiresAt: expiresAt,
+		IsLoggedIn:     true,
 	}
 	return s.storage.SaveSession(chatID, session)
 }
 
+func (s *OAuthService) SaveState(state string, chatID int64) error {
+	return s.storage.SaveState(state, chatID)
+}
+
 func (s *OAuthService) GetUserSession(chatID int64) (*domain.UserSession, error) {
 	return s.storage.GetSession(chatID)
+}
+
+func (s *OAuthService) Logout(chatID int64) error {
+	return s.storage.Logout(chatID)
+}
+
+func (s *OAuthService) IsLoggedIn(chatID int64) (bool, error) {
+	return s.storage.IsLoggedIn(chatID)
 }
 
 func GenerateState() (string, error) {
