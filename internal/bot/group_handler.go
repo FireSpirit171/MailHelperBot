@@ -8,12 +8,37 @@ import (
 	"strings"
 )
 
-// Обработчик добавления бота в группу
 func (b *Bot) handleBotAddedToGroup(msg *tgbotapi.Message) {
 	chat := msg.Chat
 	user := msg.From
 
-	// Проверяем, является ли пользователь администратором
+	session, err := b.oauth.GetUserSession(user.ID)
+	if err != nil || session == nil || session.AccessToken == "" {
+		log.Printf("User %d is not authorized for group %d", user.ID, chat.ID)
+
+		groupMsg := fmt.Sprintf(`👋 Привет! Я бот для выгрузки медиа в облако Mail.ru.
+
+❌ ДЛЯ НАСТРОЙКИ БОТА НЕОБХОДИМО АВТОРИЗОВАТЬСЯ
+
+Администратор %s, пожалуйста:
+
+1. Перейдите в личный чат с ботом @%s
+2. Используйте команду /login для авторизации
+3. После авторизации добавьте бота в группу заново или используйте /bot_settings здесь
+
+После авторизации бот автоматически предложит настройку типа медиа.`,
+			user.FirstName,
+			b.Api.Self.UserName)
+
+		reply := tgbotapi.NewMessage(chat.ID, groupMsg)
+		// Убираем ParseMode вообще
+		_, err := b.Api.Send(reply)
+		if err != nil {
+			log.Printf("Error sending message: %v", err)
+		}
+		return
+	}
+
 	member, err := b.Api.GetChatMember(tgbotapi.GetChatMemberConfig{
 		ChatConfigWithUser: tgbotapi.ChatConfigWithUser{
 			ChatID: chat.ID,
@@ -25,7 +50,6 @@ func (b *Bot) handleBotAddedToGroup(msg *tgbotapi.Message) {
 		return
 	}
 
-	// Проверяем, что пользователь является создателем или администратором
 	if !b.isUserAdmin(member) {
 		reply := tgbotapi.NewMessage(chat.ID,
 			"❌ Только администратор группы может настроить бота.")
@@ -33,21 +57,16 @@ func (b *Bot) handleBotAddedToGroup(msg *tgbotapi.Message) {
 		return
 	}
 
-	// Создаем папку для группы в буфере
-	if _, err := b.createGroupBufferFolder(chat.ID); err != nil {
-		log.Printf("Error creating group buffer folder: %v", err)
-		reply := tgbotapi.NewMessage(chat.ID,
-			"❌ Ошибка при создании папки для группы.")
-		b.Api.Send(reply)
-		return
-	}
+	// Генерируем путь к папке в облаке
+	cloudFolderPath := b.mediaProcessor.GenerateCloudFolderPath(chat.ID, chat.Title)
 
 	// Сохраняем информацию о группе
 	group := &domain.GroupSession{
-		GroupID:    chat.ID,
-		GroupTitle: chat.Title,
-		OwnerID:    user.ID,
-		MediaType:  "photos", // по умолчанию
+		GroupID:         chat.ID,
+		GroupTitle:      chat.Title,
+		OwnerChatID:     user.ID,
+		MediaType:       "photos", // по умолчанию
+		CloudFolderPath: cloudFolderPath,
 	}
 
 	if err := b.groupRepo.SaveGroupSession(group); err != nil {
@@ -62,16 +81,32 @@ func (b *Bot) handleBotAddedToGroup(msg *tgbotapi.Message) {
 	b.sendMediaTypeSelection(chat.ID)
 }
 
-// Проверка прав администратора
+func (b *Bot) sendAuthRequiredMessage(userID int64, groupTitle string) {
+	text := fmt.Sprintf(`🔐 Требуется авторизация для группы "%s"
+
+Для настройки бота в группе необходимо авторизоваться через Mail.ru.
+
+Пожалуйста:
+
+1. Используйте команду /login ниже для авторизации
+2. После успешной авторизации
+3. Вернитесь в группу "%s"
+4. Добавьте бота заново или используйте команду /bot_settings
+
+После авторизации бот автоматически определит группу и предложит настройку.`, groupTitle, groupTitle)
+
+	msg := tgbotapi.NewMessage(userID, text)
+	b.Api.Send(msg)
+}
+
 func (b *Bot) isUserAdmin(member tgbotapi.ChatMember) bool {
 	return member.Status == "creator" || member.Status == "administrator"
 }
 
-// Отправка клавиатуры выбора типа медиа
 func (b *Bot) sendMediaTypeSelection(chatID int64) {
 	text := `📁 Бот добавлен в группу!
 
-Выберите тип медиа для выгрузки в локальную папку:`
+Выберите тип медиа для автоматической выгрузки в облако:`
 
 	keyboard := tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(
@@ -88,7 +123,6 @@ func (b *Bot) sendMediaTypeSelection(chatID int64) {
 	b.Api.Send(msg)
 }
 
-// Обработчик выбора типа медиа
 func (b *Bot) handleMediaTypeSelection(chatID int64, data string, messageID int) {
 	parts := strings.Split(data, ":")
 	if len(parts) != 2 {
@@ -118,9 +152,32 @@ func (b *Bot) handleMediaTypeSelection(chatID int64, data string, messageID int)
 		return
 	}
 
+	// Проверяем авторизацию владельца и создаем папку с публичной ссылкой
+	session, err := b.oauth.GetUserSession(group.OwnerChatID)
+	if err == nil && session != nil && session.AccessToken != "" {
+		// Создаем папку в облаке
+		err := b.mediaProcessor.CreateCloudFolder(session.AccessToken, group.CloudFolderPath)
+		if err != nil {
+			log.Printf("Error creating cloud folder: %v", err)
+		} else {
+			// Создаем публичную ссылку
+			publicURL, err := b.mediaProcessor.CreatePublicLink(session.AccessToken, group.CloudFolderPath)
+			if err != nil {
+				log.Printf("Error creating public link: %v", err)
+			} else {
+				group.PublicURL = publicURL
+				b.groupRepo.SaveGroupSession(group)
+			}
+		}
+	}
+
 	// Обновляем сообщение
-	text := fmt.Sprintf("✅ Настройки сохранены!\n\nГруппа: %s\nТип медиа: %s\n\nПапка: buffers/%d",
-		group.GroupTitle, validTypes[mediaType], group.GroupID)
+	text := fmt.Sprintf("✅ Настройки сохранены!\n\nГруппа: %s\nТип медиа: %s\n\n☁️ Облачная папка: %s",
+		group.GroupTitle, validTypes[mediaType], group.CloudFolderPath)
+
+	if group.PublicURL != "" {
+		text += fmt.Sprintf("\n\n🔗 Публичная ссылка:\n%s", group.PublicURL)
+	}
 
 	editMsg := tgbotapi.NewEditMessageText(chatID, messageID, text)
 	b.Api.Send(editMsg)
@@ -128,15 +185,14 @@ func (b *Bot) handleMediaTypeSelection(chatID int64, data string, messageID int)
 	// Отправляем инструкцию
 	instruction := `📖 Инструкция:
 
-Теперь бот будет автоматически сохранять все новые медиафайлы указанного типа из этой группы в локальную папку.
+Теперь бот будет автоматически загружать все новые медиафайлы указанного типа из этой группы прямо в ваше облако Mail.ru.
 
-Для просмотра статуса используйте команду /group_status`
+Для просмотра статуса и ссылки используйте команду /group_status`
 
 	msg := tgbotapi.NewMessage(chatID, instruction)
 	b.Api.Send(msg)
 }
 
-// Команда для просмотра статуса группы
 func (b *Bot) handleGroupStatus(msg *tgbotapi.Message) {
 	group, err := b.groupRepo.GetGroupSession(msg.Chat.ID)
 	if err != nil || group == nil {
@@ -146,10 +202,10 @@ func (b *Bot) handleGroupStatus(msg *tgbotapi.Message) {
 		return
 	}
 
-	photosCount, videosCount, err := b.groupRepo.GetGroupMediaStats(msg.Chat.ID)
+	groupStats, err := b.groupRepo.GetGroupMediaStats(msg.Chat.ID)
 	if err != nil {
 		log.Printf("Error getting media stats: %v", err)
-		photosCount, videosCount = 0, 0
+		groupStats.PhotosCount, groupStats.VideosCount = 0, 0
 	}
 
 	mediaTypeText := map[string]string{
@@ -161,20 +217,38 @@ func (b *Bot) handleGroupStatus(msg *tgbotapi.Message) {
 	text := fmt.Sprintf(`📊 Статус группы: %s
 
 Тип медиа: %s
-Сохранено фото: %d
-Сохранено видео: %d
-Локальная папка: buffers/%d`,
+Загружено фото: %d
+Загружено видео: %d
+☁️ Облачная папка: %s`,
 		group.GroupTitle,
 		mediaTypeText[group.MediaType],
-		photosCount,
-		videosCount,
-		group.GroupID)
+		groupStats.PhotosCount,
+		groupStats.VideosCount,
+		group.CloudFolderPath)
+
+	// Добавляем публичную ссылку, если она есть
+	if group.PublicURL != "" {
+		text += fmt.Sprintf("\n\n🔗 Публичная ссылка:\n%s", group.PublicURL)
+		text += "\n\n📤 Поделитесь этой ссылкой с друзьями для просмотра медиа!"
+	} else {
+		// Пытаемся создать публичную ссылку, если её еще нет
+		session, err := b.oauth.GetUserSession(msg.Chat.ID)
+		if err == nil && session != nil && session.AccessToken != "" {
+			publicURL, err := b.mediaProcessor.CreatePublicLink(session.AccessToken, group.CloudFolderPath)
+			if err == nil && publicURL != "" {
+				group.PublicURL = publicURL
+				b.groupRepo.SaveGroupSession(group)
+				text += fmt.Sprintf("\n\n🔗 Публичная ссылка:\n%s", publicURL)
+				text += "\n\n📤 Поделитесь этой ссылкой с друзьями для просмотра медиа!"
+			}
+		}
+	}
 
 	reply := tgbotapi.NewMessage(msg.Chat.ID, text)
+	reply.ParseMode = "HTML"
 	b.Api.Send(reply)
 }
 
-// Команда для управления группами
 func (b *Bot) handleMyGroups(msg *tgbotapi.Message) {
 	groups, err := b.groupRepo.GetUserGroups(msg.Chat.ID)
 	if err != nil {
@@ -197,12 +271,18 @@ func (b *Bot) handleMyGroups(msg *tgbotapi.Message) {
 			"all":    "📷🎥",
 		}
 
-		photosCount, videosCount, _ := b.groupRepo.GetGroupMediaStats(group.GroupID)
-		text += fmt.Sprintf("%d. %s %s\n   📁 buffers/%d | 📷%d 🎥%d\n\n",
+		groupStats, _ := b.groupRepo.GetGroupMediaStats(group.GroupID)
+		text += fmt.Sprintf("%d. %s %s\n   ☁️ В облаке: 📷%d 🎥%d",
 			i+1, mediaTypeText[group.MediaType], group.GroupTitle,
-			group.GroupID, photosCount, videosCount)
+			groupStats.PhotosCount, groupStats.VideosCount)
+
+		if group.PublicURL != "" {
+			text += fmt.Sprintf("\n   🔗 Ссылка: %s", group.PublicURL)
+		}
+		text += "\n\n"
 	}
 
 	reply := tgbotapi.NewMessage(msg.Chat.ID, text)
+	reply.ParseMode = "HTML"
 	b.Api.Send(reply)
 }

@@ -1,4 +1,4 @@
-FROM golang:1.23-alpine
+FROM golang:1.24-alpine
 
 # Устанавливаем нужные пакеты
 RUN apk add --no-cache git bash netcat-openbsd

@@ -17,28 +17,39 @@ func NewPostgresStorage(db *sql.DB) *PostgresStorage {
 	return &PostgresStorage{db: db}
 }
 
-// ------------------ Сессии ------------------
+// ==================== Методы для работы с сессиями ====================
 
 func (p *PostgresStorage) SaveSession(chatID int64, session *domain.UserSession) error {
 	fmt.Printf("Saving session to DB: chatID=%d, name=%s, email=%s\n", chatID, session.Name, session.Email)
+
 	_, err := p.db.Exec(`
-		INSERT INTO user_sessions (chat_id, name, email, access_token, refresh_token)
-		VALUES ($1,$2,$3,$4,$5)
+		INSERT INTO user_sessions (chat_id, name, email, access_token, refresh_token, token_expires_at, is_logged_in)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT (chat_id) DO UPDATE
-		SET name=$2, email=$3, access_token=$4, refresh_token=$5
-	`, chatID, session.Name, session.Email, session.AccessToken, session.RefreshToken)
+		SET name = EXCLUDED.name,
+		    email = EXCLUDED.email,
+		    access_token = EXCLUDED.access_token,
+		    refresh_token = EXCLUDED.refresh_token,
+		    token_expires_at = EXCLUDED.token_expires_at,
+		    is_logged_in = EXCLUDED.is_logged_in,
+		    updated_at = now()
+	`, chatID, session.Name, session.Email, session.AccessToken, session.RefreshToken,
+		session.TokenExpiresAt, session.IsLoggedIn)
+
 	return err
 }
 
 func (p *PostgresStorage) GetSession(chatID int64) (*domain.UserSession, error) {
 	row := p.db.QueryRow(`
-		SELECT chat_id, name, email, access_token, refresh_token
+		SELECT chat_id, name, email, access_token, refresh_token, token_expires_at, is_logged_in, created_at, updated_at
 		FROM user_sessions
-		WHERE chat_id=$1
+		WHERE chat_id = $1 AND is_logged_in = true
 	`, chatID)
 
 	s := &domain.UserSession{}
-	err := row.Scan(&s.ChatID, &s.Name, &s.Email, &s.AccessToken, &s.RefreshToken)
+	err := row.Scan(&s.ChatID, &s.Name, &s.Email, &s.AccessToken, &s.RefreshToken,
+		&s.TokenExpiresAt, &s.IsLoggedIn, &s.CreatedAt, &s.UpdatedAt)
+
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -48,12 +59,51 @@ func (p *PostgresStorage) GetSession(chatID int64) (*domain.UserSession, error) 
 	return s, nil
 }
 
-func (p *PostgresStorage) DeleteSession(chatID int64) error {
-	_, err := p.db.Exec(`DELETE FROM user_sessions WHERE chat_id=$1`, chatID)
+func (p *PostgresStorage) UpdateTokens(chatID int64, accessToken, refreshToken string, expiresAt *time.Time) error {
+	_, err := p.db.Exec(`
+		UPDATE user_sessions 
+		SET access_token = $2,
+		    refresh_token = $3,
+		    token_expires_at = $4,
+		    updated_at = now()
+		WHERE chat_id = $1
+	`, chatID, accessToken, refreshToken, expiresAt)
+
 	return err
 }
 
-// ------------------ State ------------------
+func (p *PostgresStorage) Logout(chatID int64) error {
+	_, err := p.db.Exec(`
+		UPDATE user_sessions 
+		SET is_logged_in = false,
+		    access_token = NULL,
+		    refresh_token = NULL,
+		    token_expires_at = NULL,
+		    updated_at = now()
+		WHERE chat_id = $1
+	`, chatID)
+
+	return err
+}
+
+func (p *PostgresStorage) IsLoggedIn(chatID int64) (bool, error) {
+	var isLoggedIn bool
+	err := p.db.QueryRow(`
+		SELECT is_logged_in 
+		FROM user_sessions 
+		WHERE chat_id = $1
+	`, chatID).Scan(&isLoggedIn)
+
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return isLoggedIn, nil
+}
+
+// ==================== Методы для работы с OAuth состояниями ====================
 
 func (p *PostgresStorage) SaveState(state string, chatID int64) error {
 	expiry := time.Now().Add(10 * time.Minute)
@@ -90,11 +140,48 @@ func (p *PostgresStorage) GetChatIDByState(state string) (int64, error) {
 }
 
 func (p *PostgresStorage) DeleteState(state string) error {
-	_, err := p.db.Exec(`DELETE FROM oauth_states WHERE state=$1`, state)
+	_, err := p.db.Exec(`DELETE FROM oauth_states WHERE state = $1`, state)
 	return err
 }
 
 func (p *PostgresStorage) CleanupExpiredStates() error {
-	_, err := p.db.Exec(`DELETE FROM oauth_states WHERE expires_at < NOW()`)
+	_, err := p.db.Exec(`DELETE FROM oauth_states WHERE expires_at < now()`)
 	return err
+}
+
+// ==================== Методы для работы с расшаренными папками ====================
+
+func (p *PostgresStorage) SaveSharedFolder(chatID int64, folderName, folderPath, publicURL string) error {
+	_, err := p.db.Exec(`
+		INSERT INTO shared_folders (chat_id, folder_name, folder_path, public_url)
+		VALUES ($1, $2, $3, $4)
+	`, chatID, folderName, folderPath, publicURL)
+
+	return err
+}
+
+func (p *PostgresStorage) GetSharedFolders(chatID int64) ([]*domain.SharedFolder, error) {
+	rows, err := p.db.Query(`
+		SELECT id, chat_id, folder_name, folder_path, public_url, created_at
+		FROM shared_folders
+		WHERE chat_id = $1
+		ORDER BY created_at DESC
+	`, chatID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var folders []*domain.SharedFolder
+	for rows.Next() {
+		folder := &domain.SharedFolder{}
+		err := rows.Scan(&folder.ID, &folder.ChatID, &folder.FolderName,
+			&folder.FolderPath, &folder.PublicURL, &folder.CreatedAt)
+		if err != nil {
+			return nil, err
+		}
+		folders = append(folders, folder)
+	}
+
+	return folders, nil
 }

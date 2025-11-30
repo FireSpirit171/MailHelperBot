@@ -13,6 +13,6 @@ type GroupRepository interface {
 	SaveProcessedMedia(media *domain.ProcessedMedia) error
 	IsMediaProcessed(mediaID string, groupID int64) (bool, error)
 	GetGroupProcessedMedia(groupID int64) ([]*domain.ProcessedMedia, error)
-	GetGroupMediaStats(groupID int64) (photosCount, videosCount int, err error)
+	GetGroupMediaStats(groupID int64) (stats *domain.GroupStats, err error)
 	MarkHistoryProcessed(groupID int64) error
 }
